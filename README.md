@@ -1,134 +1,212 @@
-# Lola - Loading Lazy Contexts
+# Lola - AI Skills Package Manager
 
-Lola lets you package AI contexts (personas, workflows, scripts, templates)
-into reusable modules that can be shared and installed across projects.
-Instead of writing monolithic prompts, you build modular, efficient AI programs.
+Lola manages and installs AI skills across different AI assistants. Package your prompts, workflows, and instructions into reusable modules that work with Claude Code, Cursor, and Gemini CLI.
 
-**Think of it this way:**
+## Supported AI Assistants
 
-- The LLM is a **non-deterministic CPU**
-- Your prompts are the **assembly language**
-- Lola modules are **libraries** that get loaded only when needed
-- Context injection is **lazy loading** for AI instructions
-
-## How Lazy Context Loading Works
-
-To manage AI context as installable modules for LLM assistants,
-Lola implements **lazy context loading** - a meta-programming technique for
-optimizing LLM workflows through modular, on-demand context injection.
-
-Traditional approach: Load everything into a massive prompt
-
-```
-You are a chef and developer and writer and...
-[Thousands of tokens of instructions]
-```
-
-Lazy context loading approach: Load only what you need, when you need it
-
-```
-Main context monitors triggers
-User says "chocolate cake"
-Load chef persona + baking workflow
-Execute step-by-step instructions
-Unload when done
-```
+| Assistant | Skill Format | Location |
+|-----------|--------------|----------|
+| Claude Code | `SKILL.md` directories | `.claude/skills/<skill>/` |
+| Cursor | `.mdc` files | `.cursor/rules/<skill>.mdc` |
+| Gemini CLI | Entries in `GEMINI.md` | `.gemini/GEMINI.md` |
 
 ## Installation
 
 ```bash
-# Clone the repository
+# With uv (recommended)
+uv tool install git+https://github.com/mrbrandao/lola
+
+# Or clone and install locally
 git clone https://github.com/mrbrandao/lola
 cd lola
-
-# Install with uv
-uv pip install -e .
-
-# Or with pip
-pip install -e .
+uv tool install .
 ```
 
 ## Quick Start
 
-### 1. List available modules
+### 1. Add a module
 
 ```bash
-lola mod ls
+# From a git repository
+lola mod add https://github.com/user/my-skills.git
+
+# From a local folder
+lola mod add ./my-local-skills
+
+# From a zip or tar file
+lola mod add ~/Downloads/skills.zip
 ```
 
-### 2. Install a module
+### 2. Install skills to your AI assistants
 
 ```bash
-# Install the module chef-buddy to a test directory
-lola mod install chef-buddy -d /tmp/test
+# Install to all assistants (user scope)
+lola install my-skills
+
+# Install to a specific assistant
+lola install my-skills -a claude-code
+
+# Install to a specific project
+lola install my-skills -s project ./my-project
+```
+
+### 3. List and manage
+
+```bash
+# List modules in registry
+lola mod ls
+
+# List installed modules
+lola installed
+
+# Update module from source
+lola mod update my-skills
+
+# Regenerate assistant files after changes
+lola update
+```
+
+## Commands
+
+### Module Management (`lola mod`)
+
+| Command | Description |
+|---------|-------------|
+| `lola mod add <source>` | Add a module from git, folder, zip, or tar |
+| `lola mod ls` | List registered modules |
+| `lola mod info <name>` | Show module details |
+| `lola mod init [name]` | Initialize a new module |
+| `lola mod update [name]` | Update module(s) from source |
+| `lola mod rm <name>` | Remove a module |
+
+### Installation
+
+| Command | Description |
+|---------|-------------|
+| `lola install <module>` | Install skills to all assistants |
+| `lola install <module> -a <assistant>` | Install to specific assistant |
+| `lola install <module> -s project <path>` | Install to a project |
+| `lola uninstall <module>` | Uninstall skills |
+| `lola installed` | List all installations |
+| `lola update` | Regenerate assistant files |
+
+## Creating a Module
+
+### 1. Initialize
+
+```bash
+lola mod init my-skills
+cd my-skills
 ```
 
 This creates:
 
-- `.lolas/chef-buddy/` - Module assets (contexts, scripts, templates)
-- `AGENTS.md` - Main context file (for Cursor)
-
-### 3. Test the module
-
-```bash
-cd /tmp/test
-cursor .
+```
+my-skills/
+  .lola/
+    module.yml       # Module manifest
+  my-skills/
+    SKILL.md         # Initial skill
 ```
 
-When you start your AI assistant:
+### 2. Edit the skill
 
-- Acts as an enthusiastic baking chef (persona loaded) - say `hello` and start
-  to interact with the `Chef Baking Buddy`
-- Provides step-by-step recipes when you say "chocolate cake" (context injected)
-- Creates blog posts when you say "new blog post" (workflow executed)
+Edit `my-skills/SKILL.md`:
 
-## LoLas
+```markdown
+---
+name: my-skills
+description: Description shown in skill listings
+---
 
-Well we need a way to share all those cool, contexts, that's why
-Lola Modules were created. modules are called **LoLas** from `Load Lazy`
+# My Skill
 
-Now that you know how Lola works, what about help us to extend lola with you own
-modules?
+Instructions for the AI assistant...
+```
 
-Here's the quick overview on how to create your own modules.
+### 3. Add more skills
 
-1. Create module structure in `modules/your-module/`
-2. Define module in `modules/lolamod.yml`
-3. Create main context file (AGENTS.md, CLAUDE.md, or GEMINI.md)
-4. Add persona and workflow contexts
-5. Add helper scripts and templates
-6. Test and share
+Create additional skill directories, each with a `SKILL.md`:
 
-See the complete guide on **[Creating Lola Modules](docs/modules.md)**
+```
+my-skills/
+  .lola/
+    module.yml
+  git-workflow/
+    SKILL.md
+  code-review/
+    SKILL.md
+```
 
-Also check the [Chef Baking Buddy Module](modules/chef-buddy) as example, with a
-module that makes your LLM become a cooking chef using a lola module.
+Update `.lola/module.yml`:
 
-## Further Reading
+```yaml
+type: lola/module
+version: 0.1.0
+description: My skills collection
 
-- **[Creating Lola Modules](docs/modules.md)** - Complete guide to building modules
-- **[Chef Buddy Example](modules/chef-buddy/)** - Working example module
-- **[Vision and Roadmap](docs/roadmap.md)** - Future plans for Lola
+skills:
+  - git-workflow
+  - code-review
+```
 
-## Contributing
+### 4. Add to registry and install
 
-Lola is an experimental project exploring lazy context loading patterns.
-Contributions welcome:
+```bash
+lola mod add ./my-skills
+lola install my-skills
+```
 
-1. Create new context modules
-2. Improve existing modules
-3. Add features to the CLI
-4. Share your use cases
+## Module Structure
+
+```
+my-module/
+  .lola/
+    module.yml       # Required: module manifest
+    source.yml       # Auto-generated: tracks source for updates
+  skill-name/
+    SKILL.md         # Required: skill definition
+    scripts/         # Optional: supporting files
+    templates/       # Optional: templates
+```
+
+### module.yml
+
+```yaml
+type: lola/module
+version: 0.1.0
+description: What this module provides
+
+skills:
+  - skill-one
+  - skill-two
+```
+
+### SKILL.md
+
+```markdown
+---
+name: skill-name
+description: When to use this skill
+---
+
+# Skill Title
+
+Your instructions, workflows, and guidance for the AI assistant.
+```
+
+## How It Works
+
+1. **Registry**: Modules are stored in `~/.lola/modules/`
+2. **Installation**: Skills are converted and copied to assistant-specific locations
+3. **Project scope**: Uses symlinks to the global module for space efficiency
+4. **Updates**: `lola mod update` re-fetches from original source; `lola update` regenerates files
 
 ## License
 
 [GPL-2.0-or-later](https://spdx.org/licenses/GPL-2.0-or-later.html)
 
-## Author
+## Authors
 
-Igor Brandao
-
----
-
-_The AI is a CPU. Prompts are the assembly. Lazy context loading is your
-build system._
+- Igor Brandao
+- Katie Mulliken
