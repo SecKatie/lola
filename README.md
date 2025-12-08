@@ -14,10 +14,10 @@ Lola manages and installs AI skills across different AI assistants. Package your
 
 ```bash
 # With uv (recommended)
-uv tool install git+https://github.com/mrbrandao/lola
+uv tool install git+https://github.com/seckatie/lola
 
 # Or clone and install locally
-git clone https://github.com/mrbrandao/lola
+git clone https://github.com/seckatie/lola
 cd lola
 uv tool install .
 ```
