@@ -65,8 +65,8 @@ def rewrite_relative_paths(content: str, assets_path: str) -> str:
     # Matches: ./path, ../path, or bare paths in code blocks/commands
     patterns = [
         # ./relative/path or ../relative/path
-        (r'(\s|^|"|\'|\()(\.\./[^\s"\')\]]+)', r'\1' + assets_path + r'/\2'),
-        (r'(\s|^|"|\'|\()(\./([^\s"\')\]]+))', r'\1' + assets_path + r'/\3'),
+        (r'(\s|^|"|\'|\(|`)(\.\./[^\s"\')\]`]+)', r'\1' + assets_path + r'/\2'),
+        (r'(\s|^|"|\'|\(|`)(\./([^\s"\')\]`]+))', r'\1' + assets_path + r'/\3'),
     ]
 
     result = content

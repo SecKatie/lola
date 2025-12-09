@@ -94,15 +94,77 @@ class Module:
         if not manifest.exists():
             errors.append(f"Missing manifest: {MODULE_MANIFEST}")
 
-        # Check each skill exists and has SKILL.md
+        # Check each skill exists and has SKILL.md with valid frontmatter
         for skill_rel in self.skills:
             skill_path = self.path / skill_rel
             if not skill_path.exists():
                 errors.append(f"Skill directory not found: {skill_rel}")
             elif not (skill_path / SKILL_FILE).exists():
                 errors.append(f"Missing {SKILL_FILE} in skill: {skill_rel}")
+            else:
+                # Validate SKILL.md frontmatter
+                skill_errors = validate_skill_frontmatter(skill_path / SKILL_FILE)
+                for err in skill_errors:
+                    errors.append(f"{skill_rel}/{SKILL_FILE}: {err}")
 
         return len(errors) == 0, errors
+
+
+def validate_skill_frontmatter(skill_file: Path) -> list[str]:
+    """
+    Validate the YAML frontmatter in a SKILL.md file.
+
+    Args:
+        skill_file: Path to the SKILL.md file
+
+    Returns:
+        List of error messages (empty if valid)
+    """
+    errors = []
+
+    try:
+        content = skill_file.read_text()
+    except Exception as e:
+        return [f"Cannot read file: {e}"]
+
+    if not content.startswith('---'):
+        errors.append("Missing YAML frontmatter (file should start with '---')")
+        return errors
+
+    # Find the closing ---
+    lines = content.split('\n')
+    end_idx = None
+    for i, line in enumerate(lines[1:], 1):
+        if line.strip() == '---':
+            end_idx = i
+            break
+
+    if end_idx is None:
+        errors.append("Unclosed YAML frontmatter (missing closing '---')")
+        return errors
+
+    frontmatter_text = '\n'.join(lines[1:end_idx])
+
+    # Try to parse as YAML
+    try:
+        frontmatter = yaml.safe_load(frontmatter_text) or {}
+    except yaml.YAMLError as e:
+        # Extract useful error info
+        error_msg = str(e)
+        if 'mapping values are not allowed' in error_msg:
+            errors.append(
+                "Invalid YAML: values containing colons must be quoted. "
+                "Example: description: \"Text with: colons\""
+            )
+        else:
+            errors.append(f"Invalid YAML frontmatter: {error_msg}")
+        return errors
+
+    # Check required fields
+    if not frontmatter.get('description'):
+        errors.append("Missing required field: 'description'")
+
+    return errors
 
 
 @dataclass

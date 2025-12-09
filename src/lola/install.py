@@ -141,7 +141,7 @@ def generate_claude_skill(source_path: Path, dest_path: Path) -> bool:
     return True
 
 
-def generate_cursor_rule(source_path: Path, rules_dir: Path, skill_name: str) -> bool:
+def generate_cursor_rule(source_path: Path, rules_dir: Path, skill_name: str, project_path: str) -> bool:
     """
     Generate Cursor .mdc rule from source.
 
@@ -149,6 +149,7 @@ def generate_cursor_rule(source_path: Path, rules_dir: Path, skill_name: str) ->
         source_path: Path to source skill in .lola/modules/
         rules_dir: Path to .cursor/rules/
         skill_name: Name of the skill
+        project_path: Path to the project root (for relative path computation)
 
     Returns:
         True if successful
@@ -158,8 +159,17 @@ def generate_cursor_rule(source_path: Path, rules_dir: Path, skill_name: str) ->
 
     rules_dir.mkdir(parents=True, exist_ok=True)
 
+    # Compute relative path from project root to the skill source
+    # e.g., .lola/modules/my-module/my-skill
+    try:
+        relative_source = source_path.relative_to(Path(project_path))
+        assets_path = str(relative_source)
+    except ValueError:
+        # Fallback to absolute path if not relative to project
+        assets_path = str(source_path)
+
     # Generate .mdc file with paths pointing to source
-    content = skill_to_cursor_mdc(source_path, str(source_path))
+    content = skill_to_cursor_mdc(source_path, assets_path)
     if content:
         mdc_file = rules_dir / f'{skill_name}.mdc'
         mdc_file.write_text(content)
@@ -385,7 +395,7 @@ def install_to_assistant(
             source = local_module_path / skill_name
 
             if assistant == 'cursor':
-                success = generate_cursor_rule(source, skill_dest, skill_name)
+                success = generate_cursor_rule(source, skill_dest, skill_name, project_path)
             else:  # claude-code
                 dest = skill_dest / skill_name
                 success = generate_claude_skill(source, dest)
@@ -462,6 +472,14 @@ def install_cmd(module_name: str, assistant: Optional[str], scope: str, project_
     module = Module.from_path(module_path)
     if not module:
         console.print(f"[red]Invalid module: no .lola/module.yml found[/red]")
+        raise SystemExit(1)
+
+    # Validate module structure and skill files
+    is_valid, errors = module.validate()
+    if not is_valid:
+        console.print(f"[red]Module '{module_name}' has validation errors:[/red]")
+        for err in errors:
+            console.print(f"  [red]- {err}[/red]")
         raise SystemExit(1)
 
     if not module.skills:
@@ -684,6 +702,15 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str]):
             console.print(f"[red]{inst.module_name}: invalid module (no .lola/module.yml)[/red]")
             continue
 
+        # Validate module structure and skill files
+        is_valid, errors = global_module.validate()
+        if not is_valid:
+            console.print(f"[red]{inst.module_name}[/red] ({inst.assistant})")
+            console.print(f"  [red]Module has validation errors:[/red]")
+            for err in errors:
+                console.print(f"    [red]- {err}[/red]")
+            continue
+
         local_modules = get_local_modules_path(inst.project_path)
 
         # Refresh the local copy/symlink from global module
@@ -700,6 +727,7 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str]):
             continue
 
         console.print(f"[cyan]{inst.module_name}[/cyan] -> {inst.assistant}")
+        console.print(f"  [dim]Local path: {source_module}[/dim]")
 
         if inst.assistant == 'gemini-cli':
             # Gemini: Update entries in GEMINI.md
@@ -719,7 +747,7 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str]):
                 source = source_module / skill_name
 
                 if inst.assistant == 'cursor':
-                    success = generate_cursor_rule(source, skill_dest, skill_name)
+                    success = generate_cursor_rule(source, skill_dest, skill_name, inst.project_path)
                 else:
                     dest = skill_dest / skill_name
                     success = generate_claude_skill(source, dest)
