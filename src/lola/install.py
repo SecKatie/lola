@@ -337,6 +337,13 @@ def install_to_assistant(
         console.print("  Use: lola install <module> -a gemini-cli -s project <path>")
         return 0
 
+    # Cursor only supports project-level rules
+    if assistant == 'cursor' and scope == 'user':
+        console.print(f"[yellow]{assistant}[/yellow] -> skipped (user scope not supported)")
+        console.print("  Cursor only supports project-level rules.")
+        console.print("  Use: lola install <module> -a cursor -s project <path>")
+        return 0
+
     try:
         skill_dest = get_assistant_skill_path(assistant, scope, project_path)
     except ValueError as e:
