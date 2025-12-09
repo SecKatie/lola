@@ -12,7 +12,7 @@ from lola.config import MODULES_DIR, get_assistant_skill_path
 from lola.layout import console
 from lola.models import Module, InstallationRegistry
 from lola.config import INSTALLED_FILE
-from lola.sources import fetch_module, detect_source_type, save_source_info, load_source_info, update_module
+from lola.sources import fetch_module, detect_source_type, save_source_info, load_source_info, update_module, validate_module_name
 from lola.install import remove_gemini_skills
 from lola.utils import ensure_lola_dirs, get_local_modules_path
 
@@ -64,13 +64,17 @@ def add_module(source: str, module_name: str):
     \b
     SOURCE can be:
       - A git repository URL (https://github.com/user/repo.git)
-      - A path to a zip file (/path/to/module.zip)
-      - A path to a tar file (/path/to/module.tar.gz)
+      - A URL to a zip file (https://example.com/module.zip)
+      - A URL to a tar file (https://example.com/module.tar.gz)
+      - A path to a local zip file (/path/to/module.zip)
+      - A path to a local tar file (/path/to/module.tar.gz)
       - A path to a local folder (/path/to/module)
 
     \b
     Examples:
         lola mod add https://github.com/user/my-skills.git
+        lola mod add https://github.com/user/repo/archive/main.zip
+        lola mod add https://example.com/skills.tar.gz
         lola mod add ./my-local-module
         lola mod add ~/Downloads/skills.zip
     """
@@ -94,6 +98,16 @@ def add_module(source: str, module_name: str):
 
     # Rename if name override provided
     if module_name and module_path.name != module_name:
+        # Validate the provided module name to prevent directory traversal
+        try:
+            module_name = validate_module_name(module_name)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            # Clean up the fetched module
+            if module_path.exists():
+                shutil.rmtree(module_path)
+            raise SystemExit(1)
+
         new_path = MODULES_DIR / module_name
         if new_path.exists():
             shutil.rmtree(new_path)

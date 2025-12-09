@@ -13,13 +13,70 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+from urllib.request import urlopen
+from urllib.error import URLError
 
 import yaml
 
 from lola.config import MODULE_MANIFEST
 
+
+def download_file(url: str, dest_path: Path) -> None:
+    """
+    Download a file from a URL to a local path.
+
+    Args:
+        url: URL to download from
+        dest_path: Local path to save the file
+
+    Raises:
+        RuntimeError: If download fails
+    """
+    try:
+        with urlopen(url, timeout=60) as response:
+            with open(dest_path, 'wb') as f:
+                shutil.copyfileobj(response, f)
+    except URLError as e:
+        raise RuntimeError(f"Failed to download {url}: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Download error: {e}")
+
 # File to track module source for updates
 SOURCE_FILE = '.lola/source.yml'
+
+
+def validate_module_name(name: str) -> str:
+    """
+    Validate and sanitize a module name to prevent directory traversal attacks.
+
+    Args:
+        name: The proposed module name
+
+    Returns:
+        The validated module name
+
+    Raises:
+        ValueError: If the name is invalid or potentially malicious
+    """
+    if not name:
+        raise ValueError("Module name cannot be empty")
+
+    # Reject path traversal attempts
+    if name in ('.', '..'):
+        raise ValueError(f"Invalid module name: '{name}' (path traversal not allowed)")
+
+    if '/' in name or '\\' in name:
+        raise ValueError(f"Invalid module name: '{name}' (path separators not allowed)")
+
+    # Reject names starting with . (hidden files/special dirs)
+    if name.startswith('.'):
+        raise ValueError(f"Invalid module name: '{name}' (cannot start with '.')")
+
+    # Reject names with null bytes or other control characters
+    if any(ord(c) < 32 for c in name):
+        raise ValueError(f"Invalid module name: '{name}' (control characters not allowed)")
+
+    return name
 
 
 class SourceHandler(ABC):
@@ -68,6 +125,9 @@ class GitSourceHandler(SourceHandler):
         if repo_name.endswith('.git'):
             repo_name = repo_name[:-4]
 
+        # Validate module name to prevent directory traversal
+        repo_name = validate_module_name(repo_name)
+
         module_dir = dest_dir / repo_name
 
         if module_dir.exists():
@@ -106,7 +166,7 @@ class ZipSourceHandler(SourceHandler):
             tmp_path = Path(tmp_dir)
 
             with zipfile.ZipFile(source_path, 'r') as zf:
-                zf.extractall(tmp_path)
+                self._safe_extract(zf, tmp_path)
 
             # Find the module directory (may be nested)
             module_dir = self._find_module_dir(tmp_path)
@@ -123,6 +183,9 @@ class ZipSourceHandler(SourceHandler):
             if module_name == tmp_path.name:
                 module_name = source_path.stem
 
+            # Validate module name to prevent directory traversal
+            module_name = validate_module_name(module_name)
+
             final_dir = dest_dir / module_name
             if final_dir.exists():
                 shutil.rmtree(final_dir)
@@ -136,6 +199,17 @@ class ZipSourceHandler(SourceHandler):
         for path in root.rglob(MODULE_MANIFEST):
             return path.parent.parent
         return None
+
+    def _safe_extract(self, zf: zipfile.ZipFile, dest: Path) -> None:
+        """Safely extract zip contents, preventing Zip Slip attacks."""
+        dest = dest.resolve()
+        for member in zf.namelist():
+            # Normalize the path and check for traversal
+            member_path = (dest / member).resolve()
+            if not str(member_path).startswith(str(dest) + os.sep) and member_path != dest:
+                raise ValueError(f"Zip Slip attack detected: {member}")
+        # All members are safe, extract them
+        zf.extractall(dest)
 
 
 class TarSourceHandler(SourceHandler):
@@ -181,6 +255,147 @@ class TarSourceHandler(SourceHandler):
                         module_name = module_name[:-len(ext)]
                         break
 
+            # Validate module name to prevent directory traversal
+            module_name = validate_module_name(module_name)
+
+            final_dir = dest_dir / module_name
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+
+            shutil.copytree(module_dir, final_dir)
+
+        return final_dir
+
+    def _find_module_dir(self, root: Path) -> Optional[Path]:
+        """Find directory containing .lola/module.yml."""
+        for path in root.rglob(MODULE_MANIFEST):
+            return path.parent.parent
+        return None
+
+
+class ZipUrlSourceHandler(SourceHandler):
+    """Handler for zip file URLs."""
+
+    def can_handle(self, source: str) -> bool:
+        """Check if source is a URL to a zip file."""
+        parsed = urlparse(source)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        # Check if the path ends with .zip
+        return parsed.path.lower().endswith('.zip')
+
+    def fetch(self, source: str, dest_dir: Path) -> Path:
+        """Download and extract zip file from URL."""
+        parsed = urlparse(source)
+        # Extract filename from URL path
+        filename = Path(parsed.path).name
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            zip_path = tmp_path / filename
+
+            # Download the zip file
+            download_file(source, zip_path)
+
+            # Extract to a subdirectory
+            extract_path = tmp_path / 'extracted'
+            extract_path.mkdir()
+
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                # Safe extraction
+                dest = extract_path.resolve()
+                for member in zf.namelist():
+                    member_path = (dest / member).resolve()
+                    if not str(member_path).startswith(str(dest) + os.sep) and member_path != dest:
+                        raise ValueError(f"Zip Slip attack detected: {member}")
+                zf.extractall(extract_path)
+
+            # Find the module directory (may be nested)
+            module_dir = self._find_module_dir(extract_path)
+            if not module_dir:
+                contents = list(extract_path.iterdir())
+                if len(contents) == 1 and contents[0].is_dir():
+                    module_dir = contents[0]
+                else:
+                    module_dir = extract_path
+
+            # Determine module name
+            module_name = module_dir.name
+            if module_name == extract_path.name:
+                module_name = Path(filename).stem
+
+            # Validate module name to prevent directory traversal
+            module_name = validate_module_name(module_name)
+
+            final_dir = dest_dir / module_name
+            if final_dir.exists():
+                shutil.rmtree(final_dir)
+
+            shutil.copytree(module_dir, final_dir)
+
+        return final_dir
+
+    def _find_module_dir(self, root: Path) -> Optional[Path]:
+        """Find directory containing .lola/module.yml."""
+        for path in root.rglob(MODULE_MANIFEST):
+            return path.parent.parent
+        return None
+
+
+class TarUrlSourceHandler(SourceHandler):
+    """Handler for tar file URLs."""
+
+    TAR_EXTENSIONS = ('.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tar.xz')
+
+    def can_handle(self, source: str) -> bool:
+        """Check if source is a URL to a tar file."""
+        parsed = urlparse(source)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        path_lower = parsed.path.lower()
+        return any(path_lower.endswith(ext) for ext in self.TAR_EXTENSIONS)
+
+    def fetch(self, source: str, dest_dir: Path) -> Path:
+        """Download and extract tar file from URL."""
+        parsed = urlparse(source)
+        filename = Path(parsed.path).name
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            tar_path = tmp_path / filename
+
+            # Download the tar file
+            download_file(source, tar_path)
+
+            # Extract to a subdirectory
+            extract_path = tmp_path / 'extracted'
+            extract_path.mkdir()
+
+            with tarfile.open(tar_path, 'r:*') as tf:
+                tf.extractall(extract_path, filter='data')
+
+            # Find the module directory (may be nested)
+            module_dir = self._find_module_dir(extract_path)
+            if not module_dir:
+                contents = list(extract_path.iterdir())
+                if len(contents) == 1 and contents[0].is_dir():
+                    module_dir = contents[0]
+                else:
+                    module_dir = extract_path
+
+            # Determine module name
+            module_name = module_dir.name
+            if module_name == extract_path.name:
+                # Strip extensions from filename
+                module_name = filename
+                for ext in ['.tar.gz', '.tgz', '.tar.bz2', '.tar.xz', '.tar']:
+                    if module_name.lower().endswith(ext):
+                        module_name = module_name[:-len(ext)]
+                        break
+
+            # Validate module name to prevent directory traversal
+            module_name = validate_module_name(module_name)
+
             final_dir = dest_dir / module_name
             if final_dir.exists():
                 shutil.rmtree(final_dir)
@@ -209,6 +424,9 @@ class FolderSourceHandler(SourceHandler):
         source_path = Path(source).resolve()
         module_name = source_path.name
 
+        # Validate module name to prevent directory traversal
+        module_name = validate_module_name(module_name)
+
         final_dir = dest_dir / module_name
         if final_dir.exists():
             shutil.rmtree(final_dir)
@@ -219,7 +437,14 @@ class FolderSourceHandler(SourceHandler):
 
 
 # Registry of all source handlers
+# Order matters:
+# 1. Zip/Tar URL handlers come first (to catch GitHub archive URLs before git handler)
+# 2. Git handler (for .git URLs and git hosting sites)
+# 3. Local file handlers
+# 4. Folder handler last (most generic)
 SOURCE_HANDLERS = [
+    ZipUrlSourceHandler(),
+    TarUrlSourceHandler(),
     GitSourceHandler(),
     ZipSourceHandler(),
     TarSourceHandler(),
@@ -247,7 +472,7 @@ def fetch_module(source: str, dest_dir: Path) -> Path:
 
     raise ValueError(
         f"Cannot handle source: {source}\n"
-        f"Supported sources: git repos, .zip files, .tar/.tar.gz/.tgz files, or local folders"
+        f"Supported sources: git repos, .zip/.tar URLs, local .zip/.tar files, or local folders"
     )
 
 
@@ -266,14 +491,15 @@ def save_source_info(module_path: Path, source: str, source_type: str):
     Args:
         module_path: Path to the module directory
         source: Original source string (URL or path)
-        source_type: Type of source (git, zip, tar, folder)
+        source_type: Type of source (git, zip, tar, zipurl, tarurl, folder)
     """
     source_file = module_path / SOURCE_FILE
     source_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # For local paths, store the absolute resolved path
+    # For local paths (not URLs), store the absolute resolved path
     if source_type in ('folder', 'zip', 'tar'):
         source = str(Path(source).resolve())
+    # URL types (zipurl, tarurl, git) keep the original URL
 
     data = {
         'source': source,
@@ -322,18 +548,20 @@ def update_module(module_path: Path) -> tuple[bool, str]:
     if not source or not source_type:
         return False, "Invalid source information."
 
-    # Validate source still exists/is accessible
+    # Validate source still exists/is accessible (for local sources only)
     if source_type == 'folder':
         if not Path(source).exists():
             return False, f"Source folder no longer exists: {source}"
     elif source_type in ('zip', 'tar'):
         if not Path(source).exists():
             return False, f"Source archive no longer exists: {source}"
+    # URL sources (zipurl, tarurl, git) will be validated during fetch
 
     # Find the appropriate handler
     handler = None
     for h in SOURCE_HANDLERS:
-        if h.__class__.__name__.replace('SourceHandler', '').lower() == source_type:
+        handler_type = h.__class__.__name__.replace('SourceHandler', '').lower()
+        if handler_type == source_type:
             handler = h
             break
 
