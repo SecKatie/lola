@@ -442,9 +442,9 @@ class TestUpdateCmd:
 
         assert result.exit_code == 0
 
-        # Registry should now reflect current module state
+        # Registry should now reflect current module state (unprefixed skill names)
         updated_inst = registry.find("mymodule")[0]
-        assert set(updated_inst.skills) == {"mymodule.skill1"}
+        assert set(updated_inst.skills) == {"skill1"}
         assert set(updated_inst.commands) == {"cmd1"}
 
 
