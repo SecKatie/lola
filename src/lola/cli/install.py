@@ -133,8 +133,8 @@ def _build_update_context(inst: Installation) -> UpdateContext | None:
     # Refresh the local copy from global module
     source_module = copy_module_to_local(global_module, local_modules)
 
-    # Compute current skills, commands, agents, and mcps from the module (with prefixes)
-    current_skills = {f"{inst.module_name}.{s}" for s in global_module.skills}
+    # Compute current skills (unprefixed), commands, agents, and mcps from the module
+    current_skills = set(global_module.skills)
     current_commands = set(global_module.commands)
     current_agents = set(global_module.agents)
     current_mcps = {f"{inst.module_name}-{m}" for m in global_module.mcps}
@@ -252,20 +252,19 @@ def _update_skills(
     if ctx.target.uses_managed_section:
         # Managed section targets: Update entries in GEMINI.md/AGENTS.md
         batch_skills = []
-        for original_skill in ctx.global_module.skills:
-            prefixed_skill = f"{ctx.inst.module_name}.{original_skill}"
-            source = _skill_source_dir(ctx.source_module, original_skill)
+        for skill in ctx.global_module.skills:
+            source = _skill_source_dir(ctx.source_module, skill)
             if source.exists():
                 description = _get_skill_description(source)
-                batch_skills.append((original_skill, description, source))
+                batch_skills.append((skill, description, source))
                 skills_ok += 1
                 if verbose:
-                    console.print(f"      [green]{prefixed_skill}[/green]")
+                    console.print(f"      [green]{skill}[/green]")
             else:
                 skills_failed += 1
                 if verbose:
                     console.print(
-                        f"      [red]{original_skill}[/red] [dim](source not found)[/dim]"
+                        f"      [red]{skill}[/red] [dim](source not found)[/dim]"
                     )
         if batch_skills:
             ctx.target.generate_skills_batch(
@@ -275,23 +274,23 @@ def _update_skills(
                 ctx.inst.project_path,
             )
     else:
-        for original_skill in ctx.global_module.skills:
-            prefixed_skill = f"{ctx.inst.module_name}.{original_skill}"
-            source = _skill_source_dir(ctx.source_module, original_skill)
+        for skill in ctx.global_module.skills:
+            source = _skill_source_dir(ctx.source_module, skill)
 
+            # Use unprefixed skill name
             success = ctx.target.generate_skill(
-                source, skill_dest, prefixed_skill, ctx.inst.project_path
+                source, skill_dest, skill, ctx.inst.project_path
             )
 
             if success:
                 skills_ok += 1
                 if verbose:
-                    console.print(f"      [green]{prefixed_skill}[/green]")
+                    console.print(f"      [green]{skill}[/green]")
             else:
                 skills_failed += 1
                 if verbose:
                     console.print(
-                        f"      [red]{original_skill}[/red] [dim](source not found)[/dim]"
+                        f"      [red]{skill}[/red] [dim](source not found)[/dim]"
                     )
 
     return skills_ok, skills_failed

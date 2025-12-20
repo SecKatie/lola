@@ -252,12 +252,12 @@ Do {cmd}.
                 registry=registry,
             )
 
-        # Check registry
+        # Check registry (skill names are now unprefixed)
         installations = registry.find("testmod")
         assert len(installations) == 1
         assert installations[0].assistant == "claude-code"
         assert installations[0].scope == "project"
-        assert "testmod.skill1" in installations[0].skills
+        assert "skill1" in installations[0].skills
         assert "cmd1" in installations[0].commands
 
     # Note: test_install_missing_skill_source and test_install_missing_command_source
