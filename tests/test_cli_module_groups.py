@@ -272,6 +272,38 @@ class TestModGroupsCommand:
         assert "1 skill" in result.output
         assert "1 command" in result.output
 
+    def test_show_group_contents(self, cli_runner, tmp_path):
+        from lola.cli.mod import mod
+
+        modules_dir, _, _ = _setup_grouped(tmp_path)
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["groups", "grouped", "frontend"])
+        assert result.exit_code == 0, result.output
+        assert "Group frontend in grouped" in result.output
+        assert "fe-skill" in result.output
+        assert "fe" in result.output
+        assert "Skills" in result.output
+        assert "Commands" in result.output
+        assert "Agents" in result.output
+        assert "(none)" in result.output  # no commands/agents in frontend
+
+    def test_show_unknown_group(self, cli_runner, tmp_path):
+        from lola.cli.mod import mod
+
+        modules_dir, _, _ = _setup_grouped(tmp_path)
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["groups", "grouped", "nope"])
+        assert result.exit_code == 1
+        assert "Unknown group" in result.output
+        assert "frontend" in result.output
+        assert "api" in result.output
+
     def test_no_groups_message(self, cli_runner, sample_module, tmp_path):
         from lola.cli.mod import mod
 
@@ -284,4 +316,20 @@ class TestModGroupsCommand:
         ):
             result = cli_runner.invoke(mod, ["groups", "sample-module"])
         assert result.exit_code == 0
+        assert "no groups" in result.output.lower()
+
+    def test_show_group_on_module_without_groups(
+        self, cli_runner, sample_module, tmp_path
+    ):
+        from lola.cli.mod import mod
+
+        modules_dir = tmp_path / ".lola" / "modules"
+        modules_dir.mkdir(parents=True)
+        shutil.copytree(sample_module, modules_dir / "sample-module")
+        with (
+            patch("lola.cli.mod.MODULES_DIR", modules_dir),
+            patch("lola.cli.mod.ensure_lola_dirs"),
+        ):
+            result = cli_runner.invoke(mod, ["groups", "sample-module", "frontend"])
+        assert result.exit_code == 1
         assert "no groups" in result.output.lower()

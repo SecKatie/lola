@@ -11,7 +11,7 @@ Optional install-time sub-groups of module context. Baseline always installs; `g
 | Model | Hybrid: baseline ∪ selected groups |
 | Layout | Convention `groups/<name>/{skills,commands,agents}/`; no `group.yaml` |
 | Default | No `-g` / `--all-groups` → baseline only + print group names |
-| CLI | `-g/--group` (repeatable), `--all-groups`, `lola mod groups` |
+| CLI | `-g/--group` (repeatable), `--all-groups`, `lola mod groups [module] [group]` (list or drill-down) |
 | Registry | Store expanded group name list (`[]` = baseline-only) |
 | Conflicts | Hard error on duplicate skill/command/agent names |
 | Forbidden in groups | `AGENTS.md`, `mcps.json` |
@@ -33,6 +33,11 @@ my-module/
 2. Omit group flags → baseline; hint optional groups.
 3. `-g` / `--all-groups` → baseline ∪ selection; record names for `update`.
 
+## Inspection
+
+- `lola mod groups <module>` — group names + artifact counts (same summary as `mod info`).
+- `lola mod groups <module> <group>` — expand one group: skills/commands/agents with truncated frontmatter descriptions (market-ls-style drill-down). Unknown group → exit 1 + known names.
+
 ## Non-goals (v1)
 
-`group.yaml`, per-group `AGENTS.md`/`mcps.json`, multi-module `lola group` bundles.
+`group.yaml`, per-group `AGENTS.md`/`mcps.json`, multi-module `lola group` bundles, top-level `lola groups`, JSON/`--verbose` for group show.

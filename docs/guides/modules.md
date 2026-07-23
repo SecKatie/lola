@@ -43,6 +43,7 @@ lola mod info my-skills
 
 # List optional install groups (if the module has groups/)
 lola mod groups my-skills
+lola mod groups my-skills frontend   # expand one group
 
 # Update module from source (replays the pinned ref automatically)
 lola mod update my-skills
@@ -112,7 +113,8 @@ my-module/
 ```
 
 ```bash
-lola mod groups my-module                         # list groups
+lola mod groups my-module                         # list groups (name + counts)
+lola mod groups my-module frontend                # expand one group (names + descriptions)
 lola install my-module -a claude-code             # baseline only (+ prints group names)
 lola install my-module -a claude-code -g frontend # baseline + frontend
 lola install my-module -a claude-code --all-groups

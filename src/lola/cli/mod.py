@@ -144,6 +144,71 @@ def _print_group_list(module: Module) -> None:
         console.print(f"  {name}{detail}")
 
 
+def _frontmatter_description(path: Path) -> str:
+    """Return truncated frontmatter description, or empty string."""
+    from lola.frontmatter import parse_file
+
+    if not path.exists():
+        return ""
+    frontmatter, _ = parse_file(path)
+    desc = frontmatter.get("description", "")
+    return desc[:60] if isinstance(desc, str) and desc else ""
+
+
+def _print_group_detail(module: Module, group_name: str) -> None:
+    """Print skills/commands/agents in a group with short descriptions."""
+    try:
+        skills, commands, agents = module._discover_group(group_name)
+    except ValidationError as e:
+        for err in e.errors:
+            console.print(f"[red]{err}[/red]")
+        known = module.list_groups()
+        if known:
+            console.print(f"[dim]Known groups: {', '.join(known)}[/dim]")
+        raise SystemExit(1)
+
+    console.print(f"[bold]Group {group_name} in {module.name}[/bold]")
+
+    console.print()
+    console.print("[bold]Skills[/bold]")
+    if not skills:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(skills.items()):
+            skill_dir = module.path / rel
+            console.print(f"  [green]{name}[/green]")
+            desc = _frontmatter_description(skill_dir / "SKILL.md")
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print("[bold]Commands[/bold]")
+    if not commands:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(commands.items()):
+            console.print(f"  [green]/{name}[/green]")
+            desc = _frontmatter_description(module.path / rel)
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print("[bold]Agents[/bold]")
+    if not agents:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(agents.items()):
+            console.print(f"  [green]@{name}[/green]")
+            desc = _frontmatter_description(module.path / rel)
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print(
+        f"[dim]Install with: lola install {module.name} -g {group_name}[/dim]"
+    )
+
+
 def _module_tree(
     name: str,
     skills: list[str] | None = None,
@@ -1144,16 +1209,21 @@ def module_info(module_name_or_path: str | None):
     default=None,
     shell_complete=complete_module_names,
 )
-def module_groups(module_name_or_path: str | None):
+@click.argument("group_name", required=False, default=None)
+def module_groups(module_name_or_path: str | None, group_name: str | None):
     """
-    List optional install groups in a module.
+    List optional install groups, or show one group's contents.
 
     MODULE_NAME_OR_PATH can be a registered module name or a local path.
     If omitted in an interactive terminal, a picker is shown.
 
+    With GROUP_NAME, lists skills/commands/agents in that group (with
+    short descriptions). Without it, lists group names and counts.
+
     \b
     Examples:
         lola mod groups my-module
+        lola mod groups my-module frontend
         lola mod groups .
         lola mod groups                 # Interactive picker
     """
@@ -1179,6 +1249,17 @@ def module_groups(module_name_or_path: str | None):
         return
 
     names = module.list_groups()
+    if group_name is not None:
+        if not names:
+            console.print(f"[red]{module.name} has no groups[/red]")
+            raise SystemExit(1)
+        if group_name not in names:
+            console.print(f"[red]Unknown group '{group_name}'[/red]")
+            console.print(f"[dim]Known groups: {', '.join(names)}[/dim]")
+            raise SystemExit(1)
+        _print_group_detail(module, group_name)
+        return
+
     if not names:
         console.print(f"[dim]{module.name} has no groups[/dim]")
         return
@@ -1190,6 +1271,7 @@ def module_groups(module_name_or_path: str | None):
         "[dim]Install with: lola install "
         f"{module.name} -g <name> …  or  --all-groups[/dim]"
     )
+    console.print(f"[dim]Inspect a group: lola mod groups {module.name} <name>[/dim]")
 
 
 @mod.command(name="update")
