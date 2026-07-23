@@ -7,7 +7,7 @@
 
 Lola is a universal AI Package Manager. If an agent's skills were an RPM, Lola is the DNF for it. Write your [skills and context modules](https://lobstertrap.org/lola/concepts/skills-and-modules/) once as portable packages, then install them to any AI assistant or agent with a single command.
 
-[![asciicast](https://asciinema.org/a/1035360.svg)](https://asciinema.org/a/1035360)
+[![asciicast](https://asciinema.org/a/YEwQ7X62RASqCokp.svg)](https://asciinema.org/a/YEwQ7X62RASqCokp)
 
 ## Supported AI Assistants
 
@@ -61,7 +61,15 @@ lola install my-skills
 
 # Or install to a specific assistant
 lola install my-skills -a claude-code
+
+# Modules with optional groups: list them, inspect one, then install
+lola mod groups my-skills
+lola mod groups my-skills frontend
+lola install my-skills -a claude-code -g frontend -g api
+lola install my-skills -a claude-code --all-groups
 ```
+
+Omit `-g` / `--all-groups` to install **baseline only**; Lola prints the available group names. See [`docs/guides/modules.md`](docs/guides/modules.md#module-groups).
 
 ## Declarative Installation
 
@@ -184,7 +192,8 @@ modules:
 |---------|-------------|
 | `lola mod add <source>` | Add a module from git, folder, zip, or tar |
 | `lola mod ls` | List registered modules |
-| `lola mod info <name>` | Show module details |
+| `lola mod info <name>` | Show module details (includes groups) |
+| `lola mod groups [name\|path] [group]` | List groups, or show one group's contents |
 | `lola mod search <query>` | Search for modules across enabled marketplaces |
 | `lola mod init [name]` | Initialize a new module |
 | `lola mod init [name] -c` | Initialize with a command template |
@@ -206,14 +215,16 @@ modules:
 
 | Command | Description |
 |---------|-------------|
-| `lola install <module>` | Install skills and commands to all assistants |
+| `lola install <module>` | Install (baseline only if the module has groups) |
 | `lola install <module> -a <assistant>` | Install to specific assistant |
+| `lola install <module> -g <group>` | Install baseline + named group (repeatable) |
+| `lola install <module> --all-groups` | Install baseline + every group |
 | `lola install <module> <path>` | Install to a specific project directory |
 | `lola install <module> --scope user` | Install globally to user configuration directories |
 | `lola uninstall <module>` | Uninstall skills and commands |
 | `lola uninstall <module> --scope user` | Uninstall from user configuration directories |
 | `lola installed` | List all installations |
-| `lola update` | Regenerate assistant files |
+| `lola update` | Regenerate assistant files (keeps recorded groups) |
 
 #### Installation Scopes
 
@@ -238,6 +249,40 @@ lola install my-module --scope user
 # Install to specific project
 lola install my-module /path/to/project
 ```
+
+#### Module Groups
+
+Some modules ship optional packs under `groups/` (sibling of `module/`). Baseline content always installs; groups are opt-in.
+
+```text
+my-module/
+  module/              # baseline (AGENTS.md, skills/, …)
+  groups/
+    frontend/
+      skills/…
+    api/
+      commands/…
+```
+
+```bash
+# List groups for a registered module (or a local path)
+lola mod groups my-module
+lola mod groups .
+
+# Show skills/commands/agents in one group (names + short descriptions)
+lola mod groups my-module frontend
+
+# Baseline only — prints available group names
+lola install my-module -a claude-code
+
+# Baseline + selected groups
+lola install my-module -a claude-code -g frontend -g api
+
+# Baseline + every group
+lola install my-module -a claude-code --all-groups
+```
+
+`lola update` reinstalls the groups recorded at install time. To change groups, uninstall and install again. Details: [`docs/guides/modules.md`](docs/guides/modules.md#module-groups).
 
 ## Creating a Module
 

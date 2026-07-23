@@ -38,9 +38,8 @@ lola install <module> -a claude-code
 ### Core Data Flow
 
 1. **Module Registration**: `lola mod add <source>` fetches modules (from git, zip, tar, or folder) to `~/.lola/modules/`
-2. **Installation**: `lola install <module>` copies modules to project's `.lola/modules/` and generates assistant-specific files
-3. **Updates**: `lola update` regenerates assistant files from source modules
-4. **Marketplace Registration**: `lola market add <name> <url>` fetches marketplace catalogs to `~/.lola/market/` (reference) and `~/.lola/market/cache/` (full catalog)
+2. **Installation**: `lola install <module>` copies modules to project's `.lola/modules/` and generates assistant-specific files. Modules with `groups/` install baseline by default; use `-g` / `--all-groups` to add groups (`lola mod groups` lists them).
+3. **Updates**: `lola update` regenerates assistant files from source modules (reuses recorded group selection)4. **Marketplace Registration**: `lola market add <name> <url>` fetches marketplace catalogs to `~/.lola/market/` (reference) and `~/.lola/market/cache/` (full catalog)
 5. **Module Discovery**: `lola search <query>` searches both the local module registry and enabled marketplace caches (use `--mod` or `--market` to scope); `lola mod search <query>` is a deprecated alias for `lola search <query> --mod`; `lola install <module>` auto-adds from marketplace if not in registry
 
 ### Installation Scopes

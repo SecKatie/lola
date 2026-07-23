@@ -41,6 +41,10 @@ lola mod ls
 # Show module details (includes pinned ref if set)
 lola mod info my-skills
 
+# List optional install groups (if the module has groups/)
+lola mod groups my-skills
+lola mod groups my-skills frontend   # expand one group
+
 # Update module from source (replays the pinned ref automatically)
 lola mod update my-skills
 
@@ -92,6 +96,31 @@ my-module/
     agents/
       helper.md
 ```
+
+## Module groups
+
+Optional install-time packs live in `groups/` as a **sibling of `module/`** (or of a flat skills root). Baseline content under `module/` always installs; groups are opt-in.
+
+```text
+my-module/
+  module/                 # baseline (AGENTS.md, skills/, …)
+  groups/
+    frontend/
+      skills/…
+      commands/…
+    api/
+      skills/…
+```
+
+```bash
+lola mod groups my-module                         # list groups (name + counts)
+lola mod groups my-module frontend                # expand one group (names + descriptions)
+lola install my-module -a claude-code             # baseline only (+ prints group names)
+lola install my-module -a claude-code -g frontend # baseline + frontend
+lola install my-module -a claude-code --all-groups
+```
+
+`lola update` reinstalls the groups recorded at install time. See [Module Groups design](../dev-guide/design/module-groups.md).
 
 ## Appending Context References
 

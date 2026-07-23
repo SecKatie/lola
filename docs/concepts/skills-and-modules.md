@@ -57,6 +57,8 @@ SKILLs are not everything. We also need MCP settings, agent personas, system pro
 
 AI Context Modules also solve the problem where a developer wants to integrate their codebase with AI context. A module can live inside a project, allowing skills to reference scripts, functions, or assets from the codebase itself. This is useful when you want to mix your codebase with agent knowledge - inheriting bootstrap scripts or utility functions into skills and commands. In this way, AI Context Modules extend skills to provide AI knowledge at a broader project level.
 
+Optional **module groups** (`groups/` next to `module/`) let consumers install a baseline plus selected packs (`lola install -g …` / `--all-groups`). See [Module Management](../guides/modules.md#module-groups).
+
 ## When to Use Each
 
 | | Agent Skill | AI Context Module |

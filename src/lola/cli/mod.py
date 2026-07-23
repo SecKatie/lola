@@ -21,6 +21,7 @@ from lola.exceptions import (
     PathExistsError,
     SourceError,
     UnsupportedSourceError,
+    ValidationError,
 )
 from lola.models import Module, InstallationRegistry
 from lola.targets import get_target
@@ -82,6 +83,130 @@ def list_registered_modules() -> list[Module]:
 def count_str(count: int, singular: str) -> str:
     """Format count with singular/plural form."""
     return f"{count} {singular}" if count == 1 else f"{count} {singular}s"
+
+
+def _resolve_module_arg(module_name_or_path: str) -> Module | None:
+    """Load a module from a registry name or filesystem path.
+
+    Prints an error and returns None when the path/name is missing or empty.
+    Exits via handle_lola_error for unknown registered names.
+    """
+    path_candidate = Path(module_name_or_path).expanduser()
+    if (
+        module_name_or_path == "."
+        or "/" in module_name_or_path
+        or path_candidate.is_dir()
+    ):
+        module_path = path_candidate.resolve()
+        if not module_path.exists():
+            console.print(f"[red]Path not found: {module_name_or_path}[/red]")
+            raise SystemExit(1)
+        if not module_path.is_dir():
+            console.print(f"[red]Not a directory: {module_name_or_path}[/red]")
+            raise SystemExit(1)
+        module = Module.from_path(module_path)
+    else:
+        module_path = MODULES_DIR / module_name_or_path
+        if not module_path.exists():
+            handle_lola_error(ModuleNotFoundError(module_name_or_path))
+        module = load_registered_module(module_path)
+
+    if not module:
+        console.print(
+            f"[yellow]No skills or commands found in '{module_name_or_path}'[/yellow]"
+        )
+        console.print(f"  [dim]Path:[/dim] {module_path}")
+        return None
+    return module
+
+
+def _print_group_list(module: Module) -> None:
+    """Print group names with artifact counts (or (none))."""
+    names = module.list_groups()
+    if not names:
+        console.print("  [dim](none)[/dim]")
+        return
+    for name in names:
+        try:
+            skills, commands, agents = module._discover_group(name)
+        except ValidationError as e:
+            err = e.errors[0] if e.errors else "invalid"
+            console.print(f"  [red]{name}[/red] [dim]({err})[/dim]")
+            continue
+        parts: list[str] = []
+        if skills:
+            parts.append(count_str(len(skills), "skill"))
+        if commands:
+            parts.append(count_str(len(commands), "command"))
+        if agents:
+            parts.append(count_str(len(agents), "agent"))
+        detail = f" ({', '.join(parts)})" if parts else ""
+        console.print(f"  {name}{detail}")
+
+
+def _frontmatter_description(path: Path) -> str:
+    """Return truncated frontmatter description, or empty string."""
+    from lola.frontmatter import parse_file
+
+    if not path.exists():
+        return ""
+    frontmatter, _ = parse_file(path)
+    desc = frontmatter.get("description", "")
+    return desc[:60] if isinstance(desc, str) and desc else ""
+
+
+def _print_group_detail(module: Module, group_name: str) -> None:
+    """Print skills/commands/agents in a group with short descriptions."""
+    try:
+        skills, commands, agents = module._discover_group(group_name)
+    except ValidationError as e:
+        for err in e.errors:
+            console.print(f"[red]{err}[/red]")
+        known = module.list_groups()
+        if known:
+            console.print(f"[dim]Known groups: {', '.join(known)}[/dim]")
+        raise SystemExit(1)
+
+    console.print(f"[bold]Group {group_name} in {module.name}[/bold]")
+
+    console.print()
+    console.print("[bold]Skills[/bold]")
+    if not skills:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(skills.items()):
+            skill_dir = module.path / rel
+            console.print(f"  [green]{name}[/green]")
+            desc = _frontmatter_description(skill_dir / "SKILL.md")
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print("[bold]Commands[/bold]")
+    if not commands:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(commands.items()):
+            console.print(f"  [green]/{name}[/green]")
+            desc = _frontmatter_description(module.path / rel)
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print("[bold]Agents[/bold]")
+    if not agents:
+        console.print("  [dim](none)[/dim]")
+    else:
+        for name, rel in sorted(agents.items()):
+            console.print(f"  [green]@{name}[/green]")
+            desc = _frontmatter_description(module.path / rel)
+            if desc:
+                console.print(f"    [dim]{desc}[/dim]")
+
+    console.print()
+    console.print(
+        f"[dim]Install with: lola install {module.name} -g {group_name}[/dim]"
+    )
 
 
 def _module_tree(
@@ -267,7 +392,8 @@ def add_module(
         console.print(error_msg)
         console.print(f"  [dim]Path:[/dim] {module_path}")
         console.print(
-            "[dim]Add skill folders with SKILL.md or commands/*.md files[/dim]"
+            "[dim]Add skill folders with SKILL.md, commands/*.md, "
+            "or groups/<name>/skills/*/SKILL.md[/dim]"
         )
         return
 
@@ -283,6 +409,8 @@ def add_module(
     console.print(f"  [dim]Skills:[/dim] {len(module.skills)}")
     console.print(f"  [dim]Commands:[/dim] {len(module.commands)}")
     console.print(f"  [dim]Agents:[/dim] {len(module.agents)}")
+    if module.has_groups():
+        console.print(f"  [dim]Groups:[/dim] {len(module.list_groups())}")
 
     if module.skills:
         console.print()
@@ -302,9 +430,16 @@ def add_module(
         for agent in module.agents:
             console.print(f"  @{agent}")
 
+    if module.has_groups():
+        console.print()
+        console.print("[bold]Groups[/bold]")
+        _print_group_list(module)
+
     console.print()
     console.print("[bold]Next steps:[/bold]")
     console.print(f"  1. lola install {module.name} -a <assistant> -s <scope>")
+    if module.has_groups():
+        console.print(f"  2. lola mod groups {module.name}  # list optional groups")
 
 
 @mod.command(name="init")
@@ -932,32 +1067,8 @@ def module_info(module_name_or_path: str | None):
             raise SystemExit(130)
 
     # Check if it's a path (contains path separators or is ".")
-    path_candidate = Path(module_name_or_path).expanduser()
-    if (
-        module_name_or_path == "."
-        or "/" in module_name_or_path
-        or path_candidate.is_dir()
-    ):
-        # Treat as a path (no source.yml expected)
-        module_path = path_candidate.resolve()
-        if not module_path.exists():
-            console.print(f"[red]Path not found: {module_name_or_path}[/red]")
-            raise SystemExit(1)
-        if not module_path.is_dir():
-            console.print(f"[red]Not a directory: {module_name_or_path}[/red]")
-            raise SystemExit(1)
-        module = Module.from_path(module_path)
-    else:
-        # Treat as a registered module name (load with content_dirname)
-        module_path = MODULES_DIR / module_name_or_path
-        if not module_path.exists():
-            handle_lola_error(ModuleNotFoundError(module_name_or_path))
-        module = load_registered_module(module_path)
+    module = _resolve_module_arg(module_name_or_path)
     if not module:
-        console.print(
-            f"[yellow]No skills or commands found in '{module_name_or_path}'[/yellow]"
-        )
-        console.print(f"  [dim]Path:[/dim] {module_path}")
         return
 
     console.print(f"[bold cyan]{module.name}[/bold cyan]")
@@ -1024,6 +1135,10 @@ def module_info(module_name_or_path: str | None):
                 console.print(f"  [red]{agent_name}[/red] [dim](not found)[/dim]")
 
     console.print()
+    console.print("[bold]Groups[/bold]")
+    _print_group_list(module)
+
+    console.print()
     console.print("[bold]MCP Servers[/bold]")
 
     if not module.mcps:
@@ -1085,6 +1200,78 @@ def module_info(module_name_or_path: str | None):
         console.print("[yellow]Validation issues:[/yellow]")
         for err in errors:
             console.print(f"  {err}")
+
+
+@mod.command(name="groups")
+@click.argument(
+    "module_name_or_path",
+    required=False,
+    default=None,
+    shell_complete=complete_module_names,
+)
+@click.argument("group_name", required=False, default=None)
+def module_groups(module_name_or_path: str | None, group_name: str | None):
+    """
+    List optional install groups, or show one group's contents.
+
+    MODULE_NAME_OR_PATH can be a registered module name or a local path.
+    If omitted in an interactive terminal, a picker is shown.
+
+    With GROUP_NAME, lists skills/commands/agents in that group (with
+    short descriptions). Without it, lists group names and counts.
+
+    \b
+    Examples:
+        lola mod groups my-module
+        lola mod groups my-module frontend
+        lola mod groups .
+        lola mod groups                 # Interactive picker
+    """
+    ensure_lola_dirs()
+
+    if module_name_or_path is None:
+        if not is_interactive():
+            console.print(
+                "[red]module_name_or_path is required in non-interactive mode[/red]"
+            )
+            raise SystemExit(1)
+        names = [m.name for m in list_registered_modules()]
+        if not names:
+            console.print("[yellow]No modules registered.[/yellow]")
+            return
+        module_name_or_path = select_module(names)
+        if not module_name_or_path:
+            console.print("[yellow]Cancelled[/yellow]")
+            raise SystemExit(130)
+
+    module = _resolve_module_arg(module_name_or_path)
+    if not module:
+        return
+
+    names = module.list_groups()
+    if group_name is not None:
+        if not names:
+            console.print(f"[red]{module.name} has no groups[/red]")
+            raise SystemExit(1)
+        if group_name not in names:
+            console.print(f"[red]Unknown group '{group_name}'[/red]")
+            console.print(f"[dim]Known groups: {', '.join(names)}[/dim]")
+            raise SystemExit(1)
+        _print_group_detail(module, group_name)
+        return
+
+    if not names:
+        console.print(f"[dim]{module.name} has no groups[/dim]")
+        return
+
+    console.print(f"[bold]Groups in {module.name} ({len(names)})[/bold]")
+    _print_group_list(module)
+    console.print()
+    console.print(
+        "[dim]Install with: lola install "
+        f"{module.name} -g <name> …  or  --all-groups[/dim]"
+    )
+    console.print(f"[dim]Inspect a group: lola mod groups {module.name} <name>[/dim]")
 
 
 @mod.command(name="update")

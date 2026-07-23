@@ -460,7 +460,9 @@ class TestInstallRefBehavior:
                 agents=[],
                 mcps=[],
                 has_instructions=False,
+                has_groups=lambda: False,
                 validate=lambda: (True, []),
+                validate_or_raise=lambda: None,
             )
             from click.testing import CliRunner
 

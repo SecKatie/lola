@@ -9,7 +9,8 @@ Complete command reference for the Lola CLI. Use `lola --help` or `lola <command
 | `lola mod add <source>`                              | Add a module from git, folder, zip, or tar     |
 | `lola mod add <source> --ref <ref>`                  | Add from a specific git branch, tag, or SHA    |
 | `lola mod ls`                                        | List registered modules                        |
-| `lola mod info <name>`                               | Show module details                            |
+| `lola mod info <name>`                               | Show module details (includes groups)          |
+| `lola mod groups [name\|path] [group]`               | List groups, or show one group's contents      |
 | `lola mod init [name]`                               | Initialize a new module                        |
 | `lola mod update [name]`                             | Update module(s) from source                   |
 | `lola mod rm <name>`                                 | Remove a module                                |
@@ -38,13 +39,15 @@ Complete command reference for the Lola CLI. Use `lola --help` or `lola <command
 
 | Command                                             | Description                                   |
 | --------------------------------------------------- | --------------------------------------------- |
-| `lola install <module>`                             | Install to all detected assistants             |
+| `lola install <module>`                             | Install (baseline only if module has groups)   |
 | `lola install <module> -a <assistant>`              | Install to specific assistant                 |
+| `lola install <module> -g <group>`                  | Install baseline + named group (repeatable)   |
+| `lola install <module> --all-groups`                | Install baseline + every group                |
 | `lola install <module>@<ref>`                       | Install at a specific git ref                 |
 | `lola install @<marketplace>/<module>`              | Install from a specific marketplace           |
 | `lola install @<marketplace>/<module>@<ref>`        | Install from a marketplace at a specific ref  |
 | `lola install <module> --append-context <path>`     | Append context reference                      |
 | `lola uninstall <module>`                           | Uninstall module                              |
 | `lola list`                                         | List all installations (shows version and ref when set) |
-| `lola update`                                       | Regenerate assistant files                    |
+| `lola update`                                       | Regenerate assistant files (keeps recorded groups) |
 | `lola sync`                                         | Install modules from `.lola-req`              |

@@ -41,13 +41,13 @@ from lola.targets import (
     TARGETS,
     _get_content_path,
     _get_skill_description,
-    _skill_source_dir,
     copy_module_to_local,
     default_assistants,
     get_registry,
     get_target,
     install_to_assistant,
 )
+from lola.targets.install import _local_artifact_path
 from lola.utils import ensure_lola_dirs, get_local_modules_path
 from lola.cli.utils import handle_lola_error
 
@@ -253,6 +253,10 @@ def _build_update_context(
     # Refresh the local copy from global module
     source_module = copy_module_to_local(global_module, local_modules)
 
+    # Re-apply recorded group selection (None = pre-feature / no filter)
+    if inst.groups is not None:
+        global_module = global_module.select_groups(inst.groups)
+
     # Compute current skills (unprefixed), commands, agents, and mcps from the module
     current_skills = set(global_module.skills)
     current_commands = set(global_module.commands)
@@ -399,8 +403,12 @@ def _update_skills(
     if ctx.target.uses_managed_section:
         # Managed section targets: Update entries in GEMINI.md/AGENTS.md
         batch_skills = []
-        for skill in ctx.global_module.skills:
-            source = _skill_source_dir(ctx.source_module, skill)
+        for skill, skill_path in zip(
+            ctx.global_module.skills, ctx.global_module.get_skill_paths()
+        ):
+            source = _local_artifact_path(
+                ctx.global_module, skill_path, ctx.source_module
+            )
             if source.exists():
                 description = _get_skill_description(source)
                 batch_skills.append((skill, description, source))
@@ -422,8 +430,12 @@ def _update_skills(
                 ctx.inst.project_path,
             )
     else:
-        for skill in ctx.global_module.skills:
-            source = _skill_source_dir(ctx.source_module, skill)
+        for skill, skill_path in zip(
+            ctx.global_module.skills, ctx.global_module.get_skill_paths()
+        ):
+            source = _local_artifact_path(
+                ctx.global_module, skill_path, ctx.source_module
+            )
 
             # Check if another module owns this skill name
             skill_name = skill
@@ -473,11 +485,11 @@ def _update_commands(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
     command_dest = ctx.target.get_command_path(path_context, scope)
     if command_dest is None:
         return 0, 0
-    content_path = _get_content_path(ctx.source_module)
-    commands_dir = content_path / "commands"
 
-    for cmd_name in ctx.global_module.commands:
-        source = commands_dir / f"{cmd_name}.md"
+    for cmd_name, cmd_path in zip(
+        ctx.global_module.commands, ctx.global_module.get_command_paths()
+    ):
+        source = _local_artifact_path(ctx.global_module, cmd_path, ctx.source_module)
         success = ctx.target.generate_command(
             source, command_dest, cmd_name, ctx.inst.module_name
         )
@@ -514,10 +526,10 @@ def _update_agents(ctx: UpdateContext, verbose: bool) -> tuple[int, int]:
     agents_ok = 0
     agents_failed = 0
 
-    content_path = _get_content_path(ctx.source_module)
-    agents_dir = content_path / "agents"
-    for agent_name in ctx.global_module.agents:
-        source = agents_dir / f"{agent_name}.md"
+    for agent_name, agent_path in zip(
+        ctx.global_module.agents, ctx.global_module.get_agent_paths()
+    ):
+        source = _local_artifact_path(ctx.global_module, agent_path, ctx.source_module)
         success = ctx.target.generate_agent(
             source, agent_dest, agent_name, ctx.inst.module_name
         )
@@ -769,6 +781,18 @@ def _format_update_summary(result: UpdateResult) -> str:
     default="project",
     help="Installation scope: project (default) or user",
 )
+@click.option(
+    "-g",
+    "--group",
+    "groups",
+    multiple=True,
+    help="Install the named module group (repeatable). Baseline is always included.",
+)
+@click.option(
+    "--all-groups",
+    is_flag=True,
+    help="Install baseline plus every discovered group.",
+)
 @click.argument("project_path", required=False, default="./")
 def install_cmd(
     module_name: Optional[str],
@@ -780,6 +804,8 @@ def install_cmd(
     append_context: tuple[str, ...],
     workspace: Optional[str],
     scope: str,
+    groups: tuple[str, ...],
+    all_groups: bool,
     project_path: str,
 ):
     """
@@ -794,6 +820,9 @@ def install_cmd(
         lola install                                   # Pick module and assistants interactively
         lola install my-module                         # Pick assistants interactively
         lola install my-module -a claude-code          # Specific assistant, no prompt
+        lola install my-module -a claude-code          # Baseline only if module has groups
+        lola install my-module -g frontend -g api      # Install specific groups
+        lola install my-module --all-groups            # Install all groups
         lola install my-module ./my-project            # Install in a specific project directory
         lola install my-module --append-context module/AGENTS.md   # Single context reference
         lola install my-module --append-context module/AGENTS.md --append-context /opt/guidelines.md  # Multiple context references
@@ -944,11 +973,45 @@ def install_cmd(
         and not module.agents
         and not module.mcps
         and not module.has_instructions
+        and not module.has_groups()
     ):
         console.print(
             f"[yellow]Module '{module_name}' has no skills, commands, agents, MCPs, or instructions defined[/yellow]"
         )
         return
+
+    # Resolve module groups before assistant selection
+    selected_groups: list[str] | None = None
+    if not module.has_groups():
+        if groups or all_groups:
+            raise click.UsageError("module has no groups")
+    else:
+        if groups and all_groups:
+            raise click.UsageError("Cannot use --group/-g together with --all-groups")
+        known = module.list_groups()
+        if all_groups:
+            selected_groups = known
+        elif groups:
+            unknown = [g for g in groups if g not in known]
+            if unknown:
+                known_str = ", ".join(known)
+                console.print(f"[red]Unknown group(s): {', '.join(unknown)}[/red]")
+                console.print(f"[dim]Known groups: {known_str}[/dim]")
+                raise SystemExit(1)
+            selected_groups = list(groups)
+        else:
+            # Default: baseline only; tell the user about optional groups.
+            selected_groups = []
+            console.print("[dim]Installing baseline only (no groups selected).[/dim]")
+            console.print(f"[dim]Optional groups: {', '.join(known)}[/dim]")
+            console.print(
+                "[dim]Use -g/--group NAME (repeatable) or --all-groups "
+                "to include them.[/dim]"
+            )
+        try:
+            module = module.select_groups(selected_groups)
+        except ValidationError as e:
+            handle_lola_error(e)
 
     # Get registry
     registry = get_registry()
@@ -998,6 +1061,7 @@ def install_cmd(
             effective_pre_install,
             effective_post_install,
             append_context_list,
+            groups=selected_groups,
         )
 
     # Update installation records with version/ref from marketplace metadata
@@ -1401,7 +1465,12 @@ def update_cmd(module_name: Optional[str], assistant: Optional[str], verbose: bo
                     continue
 
                 # Build context for update
-                ctx = _build_update_context(inst, registry)
+                try:
+                    ctx = _build_update_context(inst, registry)
+                except ValidationError as e:
+                    err = "; ".join(e.errors) if e.errors else str(e)
+                    console.print(f"    [red]{inst.assistant}: {err}[/red]")
+                    continue
                 if not ctx:
                     console.print(
                         f"    [red]{inst.assistant}: failed to build context[/red]"

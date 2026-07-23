@@ -26,6 +26,10 @@ from urllib.request import urlopen
 import yaml
 
 from lola.config import SKILL_FILE
+from lola.models import (
+    GROUPS_DIRNAME,
+    SKILLS_DIRNAME,
+)
 from lola.exceptions import (
     ModuleNameError,
     SecurityError,
@@ -34,6 +38,55 @@ from lola.exceptions import (
 )
 
 SOURCE_TYPES = ["git", "zip", "tar", "folder", "zipurl", "tarurl"]
+
+# Parent-repo git vars (e.g. during pre-commit) must not override ``git -C``.
+_GIT_ENV_BLOCKLIST = frozenset(
+    {
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    }
+)
+
+
+def _git_subprocess_env() -> dict[str, str]:
+    """Environment for git subprocesses that target an explicit ``-C`` path."""
+    return {k: v for k, v in os.environ.items() if k not in _GIT_ENV_BLOCKLIST}
+
+
+def _has_groups_layout(path: Path) -> bool:
+    """True if ``path/groups/<name>/skills/<skill>/SKILL.md`` exists."""
+    groups = path / GROUPS_DIRNAME
+    if not groups.is_dir():
+        return False
+    for group in groups.iterdir():
+        if not group.is_dir() or group.name.startswith("."):
+            continue
+        skills = group / SKILLS_DIRNAME
+        if not skills.is_dir():
+            continue
+        for skill in skills.iterdir():
+            if skill.is_dir() and (skill / SKILL_FILE).is_file():
+                return True
+    return False
+
+
+def _module_root_from_skill_dir(skill_dir: Path) -> Path:
+    """Map a SKILL.md parent directory to its enclosing module root.
+
+    Handles ``groups/<group>/skills/<skill>/``, classic ``…/skills/<skill>/``,
+    and single-skill packages (``<skill>/SKILL.md``).
+    """
+    if skill_dir.parent.name == SKILLS_DIRNAME:
+        group_dir = skill_dir.parent.parent
+        # groups/<group>/skills/<skill>
+        if group_dir.parent.name == GROUPS_DIRNAME:
+            return group_dir.parent.parent
+        return group_dir
+    return skill_dir.parent
 
 
 # =============================================================================
@@ -241,12 +294,18 @@ class ZipSourceHandler(SourceHandler):
         return module_dir
 
     def _find_module_dir(self, root: Path) -> Optional[Path]:
+        # Prefer groups/ layout at the extract root (or its single child) so
+        # nested experimental/*/SKILL.md does not win over groups/.
+        candidates = [root]
+        children = [p for p in root.iterdir() if p.is_dir()]
+        if len(children) == 1:
+            candidates.append(children[0])
+        for candidate in candidates:
+            if _has_groups_layout(candidate):
+                return candidate
+
         for path in root.rglob(SKILL_FILE):
-            skill_dir = path.parent
-            maybe_skills_dir = skill_dir.parent
-            if maybe_skills_dir.name == "skills":
-                return maybe_skills_dir.parent
-            return maybe_skills_dir
+            return _module_root_from_skill_dir(path.parent)
 
         for path in root.rglob("commands"):
             if path.is_dir() and list(path.glob("*.md")):
@@ -321,12 +380,18 @@ class TarSourceHandler(SourceHandler):
         return module_dir
 
     def _find_module_dir(self, root: Path) -> Optional[Path]:
+        # Prefer groups/ layout at the extract root (or its single child) so
+        # nested experimental/*/SKILL.md does not win over groups/.
+        candidates = [root]
+        children = [p for p in root.iterdir() if p.is_dir()]
+        if len(children) == 1:
+            candidates.append(children[0])
+        for candidate in candidates:
+            if _has_groups_layout(candidate):
+                return candidate
+
         for path in root.rglob(SKILL_FILE):
-            skill_dir = path.parent
-            maybe_skills_dir = skill_dir.parent
-            if maybe_skills_dir.name == "skills":
-                return maybe_skills_dir.parent
-            return maybe_skills_dir
+            return _module_root_from_skill_dir(path.parent)
 
         for path in root.rglob("commands"):
             if path.is_dir() and list(path.glob("*.md")):
@@ -485,6 +550,10 @@ class FolderSourceHandler(SourceHandler):
         # zip/tar handlers do.
         if module_content_dirname:
             module_root = source_path
+        elif _has_groups_layout(source_path):
+            # groups/ is a sibling of module/; copy the whole repo root so
+            # nested experimental/*/SKILL.md does not win discovery.
+            module_root = source_path
         else:
             module_root = self._find_module_root(source_path, kept) or source_path
         module_name = validate_module_name(module_root.name)
@@ -533,6 +602,7 @@ class FolderSourceHandler(SourceHandler):
                 text=True,
                 check=True,
                 timeout=30,
+                env=_git_subprocess_env(),
             )
         except (
             subprocess.CalledProcessError,
@@ -563,9 +633,7 @@ class FolderSourceHandler(SourceHandler):
                 # source_path.
                 if skill_dir == source_path:
                     continue
-                if skill_dir.parent.name == "skills":
-                    return skill_dir.parent.parent
-                return skill_dir.parent
+                return _module_root_from_skill_dir(skill_dir)
         # Fall back to commands/*.md
         for rel in candidates:
             if rel.suffix == ".md" and rel.parent.name == "commands":
@@ -754,7 +822,12 @@ def predict_module_name(source: str) -> Optional[str]:
             source_path = Path(source).resolve()
             handler = FolderSourceHandler()
             kept = handler._git_kept_paths(source_path)
-            module_root = handler._find_module_root(source_path, kept) or source_path
+            if _has_groups_layout(source_path):
+                module_root = source_path
+            else:
+                module_root = (
+                    handler._find_module_root(source_path, kept) or source_path
+                )
             module_name = validate_module_name(module_root.name)
 
         elif source_type == "zip":
