@@ -481,6 +481,7 @@ class TestFolderSourceHandler:
 
     def test_fetch_honors_gitignore_when_source_is_git_repo(self, tmp_path):
         """Files matching .gitignore are not copied."""
+        import os
         import subprocess
 
         source_dir = tmp_path / "mymodule"
@@ -491,8 +492,24 @@ class TestFolderSourceHandler:
         secrets = source_dir / "secrets"
         secrets.mkdir()
         (secrets / "key").write_text("super secret")
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in {
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                "GIT_PREFIX",
+            }
+        }
         subprocess.run(
-            ["git", "init", "-q", str(source_dir)], check=True, capture_output=True
+            ["git", "init", "-q", str(source_dir)],
+            check=True,
+            capture_output=True,
+            env=env,
         )
 
         dest_dir = tmp_path / "dest"
@@ -503,6 +520,44 @@ class TestFolderSourceHandler:
         assert (result / "file.txt").exists()
         assert not (result / "ignored.log").exists()
         assert not (result / "secrets").exists()
+
+    def test_git_kept_paths_ignores_parent_git_dir_env(self, tmp_path, monkeypatch):
+        """Parent GIT_DIR (e.g. pre-commit) must not hijack git -C ls-files."""
+        import os
+        import subprocess
+
+        source_dir = tmp_path / "mymodule"
+        source_dir.mkdir()
+        (source_dir / "file.txt").write_text("kept")
+        (source_dir / ".gitignore").write_text("ignored.log\n")
+        (source_dir / "ignored.log").write_text("noise")
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in {
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_OBJECT_DIRECTORY",
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                "GIT_PREFIX",
+            }
+        }
+        subprocess.run(
+            ["git", "init", "-q", str(source_dir)],
+            check=True,
+            capture_output=True,
+            env=env,
+        )
+        monkeypatch.setenv("GIT_DIR", str(Path.cwd() / ".git"))
+        monkeypatch.setenv("GIT_WORK_TREE", str(Path.cwd()))
+
+        kept = self.handler._git_kept_paths(source_dir)
+
+        assert kept is not None
+        assert Path("file.txt") in kept
+        assert Path("ignored.log") not in kept
 
     def test_git_kept_paths_uses_nul_terminated_output(self, tmp_path):
         """Git output paths are parsed without C-style quoting."""
@@ -544,6 +599,37 @@ class TestFolderSourceHandler:
         assert (result / "skills" / "example" / "SKILL.md").exists()
         assert not (result / "tests").exists()
         assert not (result / "README.md").exists()
+
+    def test_fetch_prefers_groups_layout_over_nested_skill_packages(self, tmp_path):
+        """Do not let experimental/*/SKILL.md win over groups/ at the repo root."""
+        source_dir = tmp_path / "prodsec-skills"
+        source_dir.mkdir()
+        (source_dir / "module").mkdir()
+        (source_dir / "module" / "AGENTS.md").write_text("# Module\n")
+        # Nested WIP skill package that would sort before groups/ alphabetically.
+        exp = source_dir / "experimental" / "early-skill"
+        exp.mkdir(parents=True)
+        (exp / "SKILL.md").write_text(
+            "---\nname: early-skill\ndescription: x\n---\n# X\n"
+        )
+        # Real groups layout
+        skill = source_dir / "groups" / "mcp-server" / "skills" / "hardening"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: hardening\ndescription: y\n---\n# Y\n"
+        )
+
+        dest_dir = tmp_path / "dest"
+        dest_dir.mkdir()
+
+        result = self.handler.fetch(str(source_dir), dest_dir)
+
+        assert result.name == "prodsec-skills"
+        assert (
+            result / "groups" / "mcp-server" / "skills" / "hardening" / "SKILL.md"
+        ).exists()
+        assert (result / "module" / "AGENTS.md").exists()
+        assert (result / "experimental" / "early-skill" / "SKILL.md").exists()
 
     def test_predict_folder_name_matches_discovered_subtree(self, tmp_path):
         """Folder name prediction matches the actual fetched module name."""

@@ -4,4 +4,4 @@ Implementation design documents paired with [Architecture Decision Records](../.
 
 | Design Doc | Paired ADR | Status |
 |------------|-----------|--------|
-| *Coming soon* | | |
+| [Module Groups](module-groups.md) | — | Implemented |

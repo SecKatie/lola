@@ -3,7 +3,7 @@ models:
     Data models for lola modules, skills, and installations
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import os
 from pathlib import Path
@@ -16,8 +16,11 @@ from lola import frontmatter as fm
 from lola.exceptions import ValidationError
 
 SKILLS_DIRNAME = "skills"
+GROUPS_DIRNAME = "groups"
 MODULE_CONTENT_DIRNAME = "module"
 LOLA_MODULE_CONTENT_DIRNAME = "lola-module"
+INSTRUCTIONS_FILE = "AGENTS.md"
+FORBIDDEN_GROUP_FILES = (INSTRUCTIONS_FILE, MCPS_FILE)
 
 
 def _is_scp_style_git_url(url: str) -> bool:
@@ -127,9 +130,6 @@ class MCPServer:
         )
 
 
-INSTRUCTIONS_FILE = "AGENTS.md"
-
-
 @dataclass
 class Module:
     """Represents a lola module."""
@@ -154,6 +154,10 @@ class Module:
     post_install_hook: str | None = (
         None  # Path to post-install script (relative to content_path)
     )
+    # When set (via select_groups), get_*_paths resolve via these module-root-relative paths
+    skill_relpaths: dict[str, str] | None = None
+    command_relpaths: dict[str, str] | None = None
+    agent_relpaths: dict[str, str] | None = None
 
     @classmethod
     def from_path(
@@ -256,13 +260,18 @@ class Module:
             except (yaml.YAMLError, OSError):
                 pass  # hooks are optional; malformed lola.yaml is non-fatal
 
-        # Only valid if has at least one skill, command, agent, mcp, or instructions
+        # Valid if baseline has content, or optional groups/ sibling has dirs
+        groups_dir = module_path / GROUPS_DIRNAME
+        has_group_dirs = groups_dir.is_dir() and any(
+            p.is_dir() and not p.name.startswith(".") for p in groups_dir.iterdir()
+        )
         if (
             not skills
             and not commands
             and not agents
             and not mcps
             and not has_instructions
+            and not has_group_dirs
         ):
             return None
 
@@ -324,19 +333,182 @@ class Module:
 
     def get_skill_paths(self) -> list[Path]:
         """Get the full paths to all skills in this module."""
+        if self.skill_relpaths is not None:
+            return [self.path / self.skill_relpaths[s] for s in self.skills]
         if self.is_single_skill:
             return [self.content_path]
         return [self.content_path / SKILLS_DIRNAME / skill for skill in self.skills]
 
     def get_command_paths(self) -> list[Path]:
         """Get the full paths to all commands in this module."""
+        if self.command_relpaths is not None:
+            return [self.path / self.command_relpaths[c] for c in self.commands]
         commands_dir = self.content_path / "commands"
         return [commands_dir / f"{cmd}.md" for cmd in self.commands]
 
     def get_agent_paths(self) -> list[Path]:
         """Get the full paths to all agents in this module."""
+        if self.agent_relpaths is not None:
+            return [self.path / self.agent_relpaths[a] for a in self.agents]
         agents_dir = self.content_path / "agents"
         return [agents_dir / f"{agent}.md" for agent in self.agents]
+
+    def list_groups(self) -> list[str]:
+        """Return sorted group directory names under path/groups/ (skip .*-names)."""
+        groups_dir = self.path / GROUPS_DIRNAME
+        if not groups_dir.is_dir():
+            return []
+        return sorted(
+            d.name
+            for d in groups_dir.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
+
+    def has_groups(self) -> bool:
+        """True when groups/ exists with at least one selectable group directory."""
+        return bool(self.list_groups())
+
+    def _group_dir(self, name: str) -> Path:
+        """Resolve groups/<name>/ under module root; reject path escape."""
+        if (
+            not name
+            or name.startswith(".")
+            or "/" in name
+            or "\\" in name
+            or ".." in Path(name).parts
+        ):
+            raise ValidationError(self.name, [f"Invalid group name: {name!r}"])
+        group_dir = (self.path / GROUPS_DIRNAME / name).resolve()
+        groups_root = (self.path / GROUPS_DIRNAME).resolve()
+        try:
+            group_dir.relative_to(groups_root)
+        except ValueError:
+            raise ValidationError(
+                self.name, [f"Group path escapes {GROUPS_DIRNAME}/: {name!r}"]
+            )
+        return group_dir
+
+    def _discover_group(
+        self, name: str
+    ) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+        """Discover skill/command/agent name→relpath maps for one group.
+
+        Raises ValidationError for forbidden files or empty groups.
+        """
+        group_dir = self._group_dir(name)
+        if not group_dir.is_dir():
+            raise ValidationError(self.name, [f"Group directory not found: {name}"])
+
+        for fname in FORBIDDEN_GROUP_FILES:
+            fpath = group_dir / fname
+            if fpath.exists():
+                rel = fpath.relative_to(self.path)
+                raise ValidationError(
+                    self.name,
+                    [f"Forbidden file in group '{name}': {rel}"],
+                )
+
+        skills: dict[str, str] = {}
+        skills_root = group_dir / SKILLS_DIRNAME
+        if skills_root.is_dir():
+            for subdir in skills_root.iterdir():
+                if subdir.name.startswith("."):
+                    continue
+                if subdir.is_dir() and (subdir / SKILL_FILE).exists():
+                    skills[subdir.name] = str(subdir.relative_to(self.path))
+
+        commands: dict[str, str] = {}
+        commands_dir = group_dir / "commands"
+        if commands_dir.is_dir():
+            for cmd_file in commands_dir.glob("*.md"):
+                commands[cmd_file.stem] = str(cmd_file.relative_to(self.path))
+
+        agents: dict[str, str] = {}
+        agents_dir = group_dir / "agents"
+        if agents_dir.is_dir():
+            for agent_file in agents_dir.glob("*.md"):
+                agents[agent_file.stem] = str(agent_file.relative_to(self.path))
+
+        if not skills and not commands and not agents:
+            raise ValidationError(
+                self.name, [f"Group '{name}' has no installable artifacts"]
+            )
+
+        return skills, commands, agents
+
+    def select_groups(self, selected: list[str]) -> "Module":
+        """Return a Module whose skills/commands/agents are baseline ∪ selected groups.
+
+        Empty ``selected`` means baseline-only.
+
+        Raises ValidationError for unknown names, empty groups, forbidden files,
+        path escape, or duplicate artifact names across baseline ∪ selection.
+        """
+        if not selected:
+            return replace(self)
+
+        known = self.list_groups()
+        skill_relpaths: dict[str, str] = {}
+        command_relpaths: dict[str, str] = {}
+        agent_relpaths: dict[str, str] = {}
+        # (kind, name) -> source label for collision messages
+        sources: dict[tuple[str, str], str] = {}
+
+        for name, path in zip(self.skills, self.get_skill_paths()):
+            skill_relpaths[name] = str(path.relative_to(self.path))
+            sources[("skill", name)] = "baseline"
+        for name, path in zip(self.commands, self.get_command_paths()):
+            command_relpaths[name] = str(path.relative_to(self.path))
+            sources[("command", name)] = "baseline"
+        for name, path in zip(self.agents, self.get_agent_paths()):
+            agent_relpaths[name] = str(path.relative_to(self.path))
+            sources[("agent", name)] = "baseline"
+
+        for gname in selected:
+            # Path-escape check before unknown-name (rejects ../ tricks)
+            self._group_dir(gname)
+            if gname not in known:
+                known_str = ", ".join(known) if known else "(none)"
+                raise ValidationError(
+                    self.name,
+                    [f"Unknown group '{gname}'. Known groups: {known_str}"],
+                )
+            gs, gc, ga = self._discover_group(gname)
+            for kind, relmap, dest in (
+                ("skill", gs, skill_relpaths),
+                ("command", gc, command_relpaths),
+                ("agent", ga, agent_relpaths),
+            ):
+                for n, rel in relmap.items():
+                    key = (kind, n)
+                    if key in sources:
+                        raise ValidationError(
+                            self.name,
+                            [
+                                f"Duplicate {kind} '{n}' in {sources[key]} "
+                                f"and group:{gname}"
+                            ],
+                        )
+                    dest[n] = rel
+                    sources[key] = f"group:{gname}"
+
+        return Module(
+            name=self.name,
+            path=self.path,
+            content_path=self.content_path,
+            skills=sorted(skill_relpaths),
+            commands=sorted(command_relpaths),
+            agents=sorted(agent_relpaths),
+            mcps=list(self.mcps),
+            has_instructions=self.has_instructions,
+            uses_module_subdir=self.uses_module_subdir,
+            is_single_skill=self.is_single_skill,
+            pre_install_hook=self.pre_install_hook,
+            post_install_hook=self.post_install_hook,
+            skill_relpaths=skill_relpaths,
+            command_relpaths=command_relpaths,
+            agent_relpaths=agent_relpaths,
+        )
 
     def validate(self) -> tuple[bool, list[str]]:
         """
@@ -360,9 +532,7 @@ class Module:
                     errors.append(f"{skill_name}/{SKILL_FILE}: {err}")
 
         # Check each command exists and has valid frontmatter
-        commands_dir = self.content_path / "commands"
-        for cmd_name in self.commands:
-            cmd_path = commands_dir / f"{cmd_name}.md"
+        for cmd_name, cmd_path in zip(self.commands, self.get_command_paths()):
             if not cmd_path.exists():
                 errors.append(f"Command file not found: commands/{cmd_name}.md")
             else:
@@ -371,9 +541,7 @@ class Module:
                     errors.append(f"commands/{cmd_name}.md: {err}")
 
         # Check each agent exists and has valid frontmatter
-        agents_dir = self.content_path / "agents"
-        for agent_name in self.agents:
-            agent_path = agents_dir / f"{agent_name}.md"
+        for agent_name, agent_path in zip(self.agents, self.get_agent_paths()):
             if not agent_path.exists():
                 errors.append(f"Agent file not found: agents/{agent_name}.md")
             else:
@@ -776,6 +944,7 @@ class Installation:
     mcps: list[str] = field(default_factory=list)
     has_instructions: bool = False
     append_context: list[str] | None = None
+    groups: list[str] | None = None  # None = pre-feature / no group filter
 
     def __post_init__(self) -> None:
         """Validate append_context items are strings."""
@@ -807,6 +976,8 @@ class Installation:
             result["ref"] = self.ref
         if self.append_context:
             result["append_context"] = self.append_context
+        if self.groups is not None:
+            result["groups"] = self.groups
         return result
 
     @classmethod
@@ -838,6 +1009,7 @@ class Installation:
             mcps=data.get("mcps", []),
             has_instructions=data.get("has_instructions", False),
             append_context=append_context,
+            groups=data.get("groups"),
         )
 
 

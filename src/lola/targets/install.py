@@ -30,10 +30,16 @@ from .base import (
     AssistantTarget,
     _get_content_path,
     _get_skill_description,
-    _skill_source_dir,
 )
 
 console = Console()
+
+
+def _local_artifact_path(
+    module: Module, artifact_path: Path, local_module_path: Path
+) -> Path:
+    """Map an artifact path under module.path onto the copied local module root."""
+    return local_module_path / artifact_path.relative_to(module.path)
 
 
 # =============================================================================
@@ -251,13 +257,11 @@ def _install_skills(
     path_context = project_path or ""
     skill_dest = target.get_skill_path(path_context, scope)
 
-    content_dirname = _get_content_dirname(module)
-
     # Batch updates for managed section targets (Gemini, OpenCode)
     if target.uses_managed_section:
         batch_skills: list[tuple[str, str, Path]] = []
-        for skill in module.skills:
-            source = _skill_source_dir(local_module_path, skill, content_dirname)
+        for skill, skill_path in zip(module.skills, module.get_skill_paths()):
+            source = _local_artifact_path(module, skill_path, local_module_path)
             if source.exists():
                 batch_skills.append((skill, _get_skill_description(source), source))
                 installed.append(skill)
@@ -268,8 +272,8 @@ def _install_skills(
                 skill_dest, module.name, batch_skills, project_path
             )
     else:
-        for skill in module.skills:
-            source = _skill_source_dir(local_module_path, skill, content_dirname)
+        for skill, skill_path in zip(module.skills, module.get_skill_paths()):
+            source = _local_artifact_path(module, skill_path, local_module_path)
             skill_name = skill  # Use unprefixed name by default
 
             # Check if skill already exists
@@ -337,11 +341,8 @@ def _install_commands(
         )
         return [], []
 
-    content_dirname = _get_content_dirname(module)
-    content_path = _get_content_path(local_module_path, content_dirname)
-    commands_dir = content_path / "commands"
-    for cmd in module.commands:
-        source = commands_dir / f"{cmd}.md"
+    for cmd, cmd_path in zip(module.commands, module.get_command_paths()):
+        source = _local_artifact_path(module, cmd_path, local_module_path)
         effective_cmd = cmd
 
         dest_file = command_dest / target.get_command_filename(module.name, cmd)
@@ -391,11 +392,8 @@ def _install_agents(
     installed: list[str] = []
     failed: list[str] = []
 
-    content_dirname = _get_content_dirname(module)
-    content_path = _get_content_path(local_module_path, content_dirname)
-    agents_dir = content_path / "agents"
-    for agent in module.agents:
-        source = agents_dir / f"{agent}.md"
+    for agent, agent_path in zip(module.agents, module.get_agent_paths()):
+        source = _local_artifact_path(module, agent_path, local_module_path)
         effective_agent = agent
 
         dest_file = agent_dest / target.get_agent_filename(module.name, agent)
@@ -636,6 +634,7 @@ def install_to_assistant(
     pre_install_script: Optional[str] = None,
     post_install_script: Optional[str] = None,
     append_context: Optional[list[str]] = None,
+    groups: Optional[list[str]] = None,
 ) -> int:
     """Install module to a specific assistant."""
     # Late import to avoid circular imports - get_target is defined in __init__.py
@@ -711,6 +710,7 @@ def install_to_assistant(
                 mcps=installed_mcps,
                 has_instructions=instructions_installed,
                 append_context=append_context,
+                groups=groups,
             )
         )
 
