@@ -7,7 +7,7 @@
 
 Lola is a universal AI Package Manager. If an agent's skills were an RPM, Lola is the DNF for it. Write your [skills and context modules](https://lobstertrap.org/lola/concepts/skills-and-modules/) once as portable packages, then install them to any AI assistant or agent with a single command.
 
-[![asciicast](https://asciinema.org/a/1035360.svg)](https://asciinema.org/a/1035360)
+[![asciicast](https://asciinema.org/a/YEwQ7X62RASqCokp.svg)](https://asciinema.org/a/YEwQ7X62RASqCokp)
 
 ## Supported AI Assistants
 
@@ -61,7 +61,14 @@ lola install my-skills
 
 # Or install to a specific assistant
 lola install my-skills -a claude-code
+
+# Modules with optional groups: list them, then install baseline + selected groups
+lola mod groups my-skills
+lola install my-skills -a claude-code -g frontend -g api
+lola install my-skills -a claude-code --all-groups
 ```
+
+Omit `-g` / `--all-groups` to install **baseline only**; Lola prints the available group names. See [`docs/guides/modules.md`](docs/guides/modules.md#module-groups).
 
 ## Declarative Installation
 
